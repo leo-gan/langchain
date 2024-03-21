@@ -8,6 +8,7 @@ from langchain_core.utils.package_inspect import (
     Module,
     Package,
     get_packages,
+    is_external_repo,
     load_module_members,
     top_two_levels_of_modules,
 )
@@ -20,26 +21,21 @@ ROOT_DIR = Path(__file__).parents[5]
 def test_get_packages_partners() -> None:
     ret = get_packages(ROOT_DIR, partner_packages=True)
     assert {
-        "langchain-ai21",
-        "langchain-airbyte",
-        "langchain-anthropic",
-        "langchain-astradb",
         "langchain-elasticsearch",
         "langchain-exa",
-        "langchain-fireworks",
-        "langchain-google-genai",
-        "langchain-google-vertexai",
-        "langchain-groq",
-        "langchain-ibm",
-        "langchain-mistralai",
         "langchain-mongodb",
-        "langchain-nomic",
-        "langchain-nvidia-ai-endpoints",
-        "langchain-nvidia-trt",
-        "langchain-openai",
-        "langchain-pinecone",
-        "langchain-robocorp",
         "langchain-together",
+        "langchain-groq",
+        "langchain-robocorp",
+        "langchain-openai",
+        "langchain-anthropic",
+        "langchain-airbyte",
+        "langchain-pinecone",
+        "langchain-nomic",
+        "langchain-mistralai",
+        "langchain-fireworks",
+        "langchain-ibm",
+        "langchain-ai21",
     }.issubset(set(ret))
     for path in ret.values():
         assert path.exists()
@@ -92,7 +88,6 @@ def test_package_init(package_name: str) -> None:
         "langchain-ai21",
         "langchain-airbyte",
         "langchain-anthropic",
-        "langchain-astradb",
         "langchain-elasticsearch",
     ],
 )
@@ -120,7 +115,9 @@ def test_get_package_version() -> None:
             package = Package(
                 package_name, package_path, is_partner=is_partner_packages, upload=False
             )
-            package_version = package.get_version(package.path)
+            package_version = package.get_version(
+                package.path, package_name=package.name
+            )
             assert package_version
             ver_parts = package_version.split(".")
             # can be 0.0.0.dev0
@@ -139,7 +136,7 @@ def test_get_package_source_path() -> None:
                 package_name, package_path, is_partner=is_partner_packages, upload=False
             )
             source_path = package.get_source_path(package.path)
-            is_external_package = package.is_external_repo(package.path)
+            is_external_package = is_external_repo(package.path)
             if is_external_package:
                 assert not source_path
             else:
@@ -257,19 +254,29 @@ def test_package_uploaded() -> None:
     assert package.modules
 
 
-def test_partner_package_uploaded() -> None:
-    package_name = "langchain-google-vertexai"
+@pytest.mark.parametrize(
+    "package_name,external_repo",
+    [
+        ("langchain-google-vertexai", True),
+        ("langchain-ai21", False),
+    ],
+)
+def test_partner_package_uploaded(package_name: str, external_repo: bool) -> None:
+    """The test package should be pip-installed."""
     packages = get_packages(ROOT_DIR, partner_packages=True)
     package_path = packages[package_name]
     package = Package(package_name, package_path, is_partner=True, upload=True)
     assert package.name == package_name
     assert package.path == package_path
-    assert package.namespace == "langchain_google_vertexai"
     assert package.is_partner is True
-    assert package.external_repo is True
+    assert package.namespace == package_name.replace("-", "_")
+    assert package.external_repo == external_repo
     assert package.version
-    assert package.source_path is None
-    assert not package.modules
+    if external_repo:
+        assert not package.source_path
+    else:
+        assert package.source_path
+    assert package.modules
 
 
 def test_top_two_levels_of_modules() -> None:

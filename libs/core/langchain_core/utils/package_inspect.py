@@ -1,10 +1,12 @@
 """Inspect langchain packages."""
+
 import importlib
 import inspect
 import logging
 import typing
 from collections import defaultdict
 from enum import Enum
+from importlib.metadata import metadata
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Sequence
 
@@ -50,13 +52,21 @@ class Module(BaseModel):
 
 
 def get_packages(repo_dir: str | Path, partner_packages: bool) -> Dict[str, Path]:
-    """Return package names and paths."""
+    """Return package names and paths to the package repo.
+
+    A package can be in the langchain monorepo or in an external repo.
+    If the package is in the external repo, the package should be pip-installed
+    and the path to the package is inside the 'site-packages/' folder.
+    A partner package should have a subfolder with README.md
+    in the 'libs/partners/`, even if the package itself is placed in
+    the external repo.
+    """
     folder_path = (
         (Path(repo_dir) / "libs" / "partners")
         if partner_packages
         else (Path(repo_dir) / "libs")
     )
-    ret = {
+    package2path = {
         (
             "langchain"
             if d.name == "langchain"
@@ -65,7 +75,31 @@ def get_packages(repo_dir: str | Path, partner_packages: bool) -> Dict[str, Path
         for d in folder_path.iterdir()
         if d.is_dir() and d.name not in ["partners"]
     }
-    return ret
+    new_package2path = {}
+    for package_name, package_path in package2path.items():
+        if is_external_repo(package_path):
+            try:
+                module = importlib.import_module(package_name.replace("-", "_"))
+            except (ModuleNotFoundError, ImportError, TypeError) as e:
+                logger.error(
+                    f"Error: Unable to import package '{package_name}' with error: {e} "
+                    f"Use 'pip install {package_name} -U' to install the package."
+                )
+            else:
+                if isinstance(module.__path__, list) and module.__path__:
+                    new_package2path[package_name] = Path(module.__path__[0])
+                else:
+                    logger.error(
+                        f"Error: Unable to find the path to the package '{package_name}'."
+                    )
+        else:
+            new_package2path[package_name] = package_path
+    return new_package2path
+
+
+def is_external_repo(package_path: Path) -> bool:
+    """Return True if the package is in the external repo."""
+    return not (package_path / "pyproject.toml").exists()
 
 
 class Package:
@@ -85,8 +119,8 @@ class Package:
         self.is_partner = is_partner
         self.namespace = self.get_namespace(name)
         if upload:
-            self.external_repo = self.is_external_repo(self.path)
-            self.version = self.get_version(self.path)
+            self.external_repo = is_external_repo(self.path)
+            self.version = self.get_version(self.path, package_name=name)
             self.source_path = self.get_source_path(self.path)
             self.modules = self.get_modules(self.path)
 
@@ -95,7 +129,7 @@ class Package:
 
     def get_source_path(self, package_path: Path) -> Path | None:
         """Return the path to the directory containing the package source code."""
-        if self.is_external_repo(package_path):
+        if is_external_repo(package_path):
             # if the package is in an external repo, we can't determine the source path
             return None
         source_dir = package_path / self.name.replace("-", "_")
@@ -103,20 +137,27 @@ class Package:
             raise ValueError(f"Source directory {source_dir} does not exist.")
         return source_dir
 
-    def get_version(self, package_path: Path) -> str:
+    def get_version(self, package_path: Path, package_name: str) -> str:
         """Return the version of the package."""
-        if self.is_external_repo(package_path):
-            # if the package is in an external repo, we can't determine the version
-            return "0.0.0"
-        try:
-            with open(package_path / "pyproject.toml", "r") as f:
-                pyproject = toml.load(f)
-        except FileNotFoundError:
-            raise ValueError(f"pyproject.toml not found in {package_path} folder.\n")
-        return pyproject["tool"]["poetry"]["version"]
-
-    def is_external_repo(self, package_path: Path) -> bool:
-        return not (package_path / "pyproject.toml").exists()
+        if is_external_repo(package_path):
+            md = metadata(package_name)
+            if "Version" in md:
+                return md["Version"]
+            elif "version" in md:
+                return md["version"]
+            else:
+                raise ValueError(
+                    f"Error: Unable to find the version of the package '{package_name}'."
+                )
+        else:
+            try:
+                with open(package_path / "pyproject.toml", "r") as f:
+                    pyproject = toml.load(f)
+            except FileNotFoundError:
+                raise ValueError(
+                    f"pyproject.toml not found in {package_path} folder.\n"
+                )
+            return pyproject["tool"]["poetry"]["version"]
 
     def get_modules(self, package_path: Path) -> Dict[str, Module]:
         """Recursively load modules of a package based on the file system.
@@ -133,16 +174,34 @@ class Package:
         qualified_module_name2module = {}
         # Traverse the package directory and load all modules
         for file_path in package_path.rglob("*.py"):
-            top_namespace, qualified_module_name = self._get_namespaces(
-                package_path, file_path
+            # if file_path.name.startswith("_"):
+            #     continue
+            qualified_module_name = file_path.relative_to(package_path)
+            # # Skip if any module part starts with an underscore
+            # if any(part.startswith("_") for part in qualified_module_name.parts):
+            #     continue
+
+            qualified_module_name = (
+                str(qualified_module_name).replace(".py", "").replace("/", ".")
             )
-            # Process only the modules that belong to the package code
-            if top_namespace != self.namespace:
-                logger.warning(
-                    f"Skipping module '{qualified_module_name}' as it does not belong "
-                    f"to the package '{self.namespace}'"
-                )
-                continue
+            # # Keep only the top level namespace
+            # top_namespace = qualified_module_name.split(".")[0]
+
+            # try:
+            #     module_members = _load_module_members(
+            #         f"{package_name}.{namespace}", namespace
+            #     )
+            #     # Merge module members if the namespace already exists
+            #     if top_namespace in modules_by_namespace:
+            #         existing_module_members = modules_by_namespace[top_namespace]
+            #         _module_members = _merge_module_members(
+            #             [existing_module_members, module_members]
+            #         )
+            #     else:
+            #         _module_members = module_members
+            #
+            #     modules_by_namespace[top_namespace] = _module_members
+
             try:
                 qualified_module_name2module[qualified_module_name] = Module(
                     name=qualified_module_name.split(".")[-1],
@@ -151,7 +210,7 @@ class Package:
                         qualified_module_name=qualified_module_name
                     ),
                 )
-            except ImportError as e:
+            except (ImportError, AttributeError, TypeError) as e:
                 logger.error(
                     f"Error: Unable to import module '{qualified_module_name}' "
                     f"with error: {e}"
@@ -159,11 +218,8 @@ class Package:
 
         return qualified_module_name2module
 
-    def _get_namespaces(self, package_path: Path, file_path: Path) -> tuple[str, str]:
-        relative_module_name = file_path.relative_to(package_path)
-        namespace = str(relative_module_name).replace(".py", "").replace("/", ".")
-        top_namespace = namespace.split(".")[0]
-        return top_namespace, namespace
+    def _get_namespaces(self, package_name: str) -> str:
+        return package_name.replace("-", "_")
 
 
 class Repo:
