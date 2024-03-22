@@ -174,33 +174,13 @@ class Package:
         qualified_module_name2module = {}
         # Traverse the package directory and load all modules
         for file_path in package_path.rglob("*.py"):
-            # if file_path.name.startswith("_"):
-            #     continue
             qualified_module_name = file_path.relative_to(package_path)
-            # # Skip if any module part starts with an underscore
-            # if any(part.startswith("_") for part in qualified_module_name.parts):
-            #     continue
-
             qualified_module_name = (
                 str(qualified_module_name).replace(".py", "").replace("/", ".")
             )
-            # # Keep only the top level namespace
-            # top_namespace = qualified_module_name.split(".")[0]
-
-            # try:
-            #     module_members = _load_module_members(
-            #         f"{package_name}.{namespace}", namespace
-            #     )
-            #     # Merge module members if the namespace already exists
-            #     if top_namespace in modules_by_namespace:
-            #         existing_module_members = modules_by_namespace[top_namespace]
-            #         _module_members = _merge_module_members(
-            #             [existing_module_members, module_members]
-            #         )
-            #     else:
-            #         _module_members = module_members
-            #
-            #     modules_by_namespace[top_namespace] = _module_members
+            # Skip the modules that are not part of the package, like "tests".
+            if qualified_module_name.split(".")[0] != self.namespace:
+                continue
 
             try:
                 qualified_module_name2module[qualified_module_name] = Module(
@@ -217,9 +197,6 @@ class Package:
                 )  # noqa: E501
 
         return qualified_module_name2module
-
-    def _get_namespaces(self, package_name: str) -> str:
-        return package_name.replace("-", "_")
 
 
 class Repo:

@@ -294,3 +294,28 @@ def test_top_two_levels_of_modules() -> None:
     no_hidden_members = top_two_levels_of_modules(package, remove_hidden=True)
     assert len(no_hidden_members) < len(default_members)
     assert (set(default_members) - set(no_hidden_members)) == {"langchain_core._api"}
+
+
+@pytest.mark.parametrize(
+    "package_name,external_repo",
+    [
+        # ("langchain-google-vertexai", True),
+        ("langchain-anthropic", False),
+    ],
+)
+def test_top_two_levels_of_modules_partner_packages(
+    package_name: str, external_repo: bool
+) -> None:
+    packages = get_packages(ROOT_DIR, partner_packages=True)
+    package_path = packages[package_name]
+    package = Package(package_name, package_path, is_partner=True, upload=True)
+
+    default_members = top_two_levels_of_modules(package)
+
+    with_empty_members = top_two_levels_of_modules(package, remove_empty=False)
+    assert len(with_empty_members) > len(default_members)
+    # assert "langchain_core.__init__" in (set(with_empty_members) - set(default_members))
+
+    no_hidden_members = top_two_levels_of_modules(package, remove_hidden=True)
+    assert len(no_hidden_members) < len(default_members)
+    # assert (set(default_members) - set(no_hidden_members)) == {"langchain_core._api"}
