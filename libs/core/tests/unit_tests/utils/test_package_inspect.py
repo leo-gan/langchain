@@ -7,7 +7,7 @@ from langchain_core.utils.package_inspect import (
     MemberType,
     Module,
     Package,
-    get_packages,
+    get_package_name2path,
     is_external_repo,
     load_module_members,
     top_two_levels_of_modules,
@@ -19,7 +19,7 @@ ROOT_DIR = Path(__file__).parents[5]
 
 
 def test_get_packages_partners() -> None:
-    ret = get_packages(ROOT_DIR, partner_packages=True)
+    ret = get_package_name2path(ROOT_DIR, partner_packages=True)
     assert {
         "langchain-elasticsearch",
         "langchain-exa",
@@ -42,7 +42,7 @@ def test_get_packages_partners() -> None:
 
 
 def test_get_packages_non_partner() -> None:
-    ret = get_packages(ROOT_DIR, partner_packages=False)
+    ret = get_package_name2path(ROOT_DIR, partner_packages=False)
     assert set(ret) == {
         "langchain",
         "langchain-cli",
@@ -67,7 +67,7 @@ def test_get_packages_non_partner() -> None:
     ],
 )
 def test_package_init(package_name: str) -> None:
-    main_packages = get_packages(ROOT_DIR, partner_packages=False)
+    main_packages = get_package_name2path(ROOT_DIR, partner_packages=False)
     package = Package(
         package_name, main_packages[package_name], is_partner=False, upload=False
     )
@@ -92,7 +92,7 @@ def test_package_init(package_name: str) -> None:
     ],
 )
 def test_package_init_partner(package_name: str) -> None:
-    partner_packages = get_packages(ROOT_DIR, partner_packages=True)
+    partner_packages = get_package_name2path(ROOT_DIR, partner_packages=True)
     package = Package(
         package_name, partner_packages[package_name], is_partner=True, upload=False
     )
@@ -109,7 +109,7 @@ def test_package_init_partner(package_name: str) -> None:
 
 def test_get_package_version() -> None:
     for is_partner_packages in [False, True]:
-        for package_name, package_path in get_packages(
+        for package_name, package_path in get_package_name2path(
             ROOT_DIR, partner_packages=is_partner_packages
         ).items():
             package = Package(
@@ -129,19 +129,15 @@ def test_get_package_version() -> None:
 
 def test_get_package_source_path() -> None:
     for is_partner_packages in [False, True]:
-        for package_name, package_path in get_packages(
+        for package_name, package_path in get_package_name2path(
             ROOT_DIR, partner_packages=is_partner_packages
         ).items():
             package = Package(
                 package_name, package_path, is_partner=is_partner_packages, upload=False
             )
             source_path = package.get_source_path(package.path)
-            is_external_package = is_external_repo(package.path)
-            if is_external_package:
-                assert not source_path
-            else:
-                assert source_path
-                assert source_path.exists()
+            assert source_path
+            assert source_path.exists()
 
 
 def test_load_module_members() -> None:
@@ -213,7 +209,7 @@ def test_external_package_load_module_members() -> None:
 
 def test_get_package_modules() -> None:
     for is_partner_packages in [False, True]:
-        for package_name, package_path in get_packages(
+        for package_name, package_path in get_package_name2path(
             ROOT_DIR, partner_packages=is_partner_packages
         ).items():
             package = Package(
@@ -235,13 +231,13 @@ def test_get_package_modules() -> None:
 def test_get_package_not_parsed() -> None:
     not_parsed_packages = ["partners"]
     for not_required_package in not_parsed_packages:
-        packages = get_packages(ROOT_DIR, partner_packages=False)
+        packages = get_package_name2path(ROOT_DIR, partner_packages=False)
         assert not_required_package not in packages
 
 
 def test_package_uploaded() -> None:
     package_name = "langchain-core"
-    packages = get_packages(ROOT_DIR, partner_packages=False)
+    packages = get_package_name2path(ROOT_DIR, partner_packages=False)
     package_path = packages[package_name]
     package = Package(package_name, package_path, is_partner=False, upload=True)
     assert package.name == package_name
@@ -263,25 +259,27 @@ def test_package_uploaded() -> None:
 )
 def test_partner_package_uploaded(package_name: str, external_repo: bool) -> None:
     """The test package should be pip-installed."""
-    packages = get_packages(ROOT_DIR, partner_packages=True)
+    packages = get_package_name2path(ROOT_DIR, partner_packages=True)
     package_path = packages[package_name]
-    package = Package(package_name, package_path, is_partner=True, upload=True)
+
+    package = Package(package_name, package_path, is_partner=True, upload=False)
     assert package.name == package_name
     assert package.path == package_path
+    assert package.source_path
     assert package.is_partner is True
     assert package.namespace == package_name.replace("-", "_")
     assert package.external_repo == external_repo
+    assert not hasattr(package, "version")
+    assert not hasattr(package, "modules")
+
+    package = Package(package_name, package_path, is_partner=True, upload=True)
     assert package.version
-    if external_repo:
-        assert not package.source_path
-    else:
-        assert package.source_path
     assert package.modules
 
 
 def test_top_two_levels_of_modules() -> None:
     package_name = "langchain-core"
-    packages = get_packages(ROOT_DIR, partner_packages=False)
+    packages = get_package_name2path(ROOT_DIR, partner_packages=False)
     package_path = packages[package_name]
     package = Package(package_name, package_path, is_partner=False, upload=True)
 
@@ -299,14 +297,14 @@ def test_top_two_levels_of_modules() -> None:
 @pytest.mark.parametrize(
     "package_name,external_repo",
     [
-        # ("langchain-google-vertexai", True),
+        ("langchain-google-vertexai", True),
         ("langchain-anthropic", False),
     ],
 )
 def test_top_two_levels_of_modules_partner_packages(
     package_name: str, external_repo: bool
 ) -> None:
-    packages = get_packages(ROOT_DIR, partner_packages=True)
+    packages = get_package_name2path(ROOT_DIR, partner_packages=True)
     package_path = packages[package_name]
     package = Package(package_name, package_path, is_partner=True, upload=True)
 
@@ -314,8 +312,26 @@ def test_top_two_levels_of_modules_partner_packages(
 
     with_empty_members = top_two_levels_of_modules(package, remove_empty=False)
     assert len(with_empty_members) > len(default_members)
-    # assert "langchain_core.__init__" in (set(with_empty_members) - set(default_members))
+    assert "langchain_anthropic.__init__" in (
+        set(with_empty_members) - set(default_members)
+    )
 
     no_hidden_members = top_two_levels_of_modules(package, remove_hidden=True)
-    assert len(no_hidden_members) < len(default_members)
-    # assert (set(default_members) - set(no_hidden_members)) == {"langchain_core._api"}
+    assert [
+        member.name
+        for members in default_members.values()
+        for member in members
+        if member.name.startswith("_")
+    ]
+    assert not [
+        member.name
+        for members in no_hidden_members.values()
+        for member in members
+        if member.name.startswith("_")
+    ]
+    # just to run without errors
+    no_hidden_members_with_empty_members = top_two_levels_of_modules(
+        package, remove_empty=False, remove_hidden=True
+    )
+    # only for these specific packages
+    assert no_hidden_members_with_empty_members == no_hidden_members

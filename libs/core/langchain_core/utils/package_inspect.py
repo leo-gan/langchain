@@ -51,7 +51,9 @@ class Module(BaseModel):
     members: Sequence[MemberInfo]
 
 
-def get_packages(repo_dir: str | Path, partner_packages: bool) -> Dict[str, Path]:
+def get_package_name2path(
+    repo_dir: str | Path, partner_packages: bool
+) -> Dict[str, Path]:
     """Return package names and paths to the package repo.
 
     A package can be in the langchain monorepo or in an external repo.
@@ -118,10 +120,12 @@ class Package:
         self.path = path
         self.is_partner = is_partner
         self.namespace = self.get_namespace(name)
+        self.external_repo = is_external_repo(self.path)
+        self.source_path = self.get_source_path(self.path)
+        self.version = None
+        self.modules = self.get_modules(self.path)
         if upload:
-            self.external_repo = is_external_repo(self.path)
             self.version = self.get_version(self.path, package_name=name)
-            self.source_path = self.get_source_path(self.path)
             self.modules = self.get_modules(self.path)
 
     def get_namespace(self, package_name: str) -> str:
@@ -129,10 +133,11 @@ class Package:
 
     def get_source_path(self, package_path: Path) -> Path | None:
         """Return the path to the directory containing the package source code."""
-        if is_external_repo(package_path):
-            # if the package is in an external repo, we can't determine the source path
-            return None
-        source_dir = package_path / self.name.replace("-", "_")
+        source_dir = (
+            package_path
+            if is_external_repo(package_path)
+            else package_path / self.namespace
+        )
         if not source_dir.exists():
             raise ValueError(f"Source directory {source_dir} does not exist.")
         return source_dir
@@ -158,6 +163,16 @@ class Package:
                     f"pyproject.toml not found in {package_path} folder.\n"
                 )
             return pyproject["tool"]["poetry"]["version"]
+
+    def _get_qualified_module_name(self, package_path: Path, file_path: Path) -> str:
+        # if is_external_repo(package_path):
+        #     # flat structure of the external repo
+        # else:
+        qualified_module_name = file_path.relative_to(package_path)
+        qualified_module_name = (
+            str(qualified_module_name).replace(".py", "").replace("/", ".")
+        )
+        return qualified_module_name
 
     def get_modules(self, package_path: Path) -> Dict[str, Module]:
         """Recursively load modules of a package based on the file system.
@@ -204,8 +219,8 @@ class Repo:
 
     def __init__(self, dir: str):
         self.dir = dir
-        self.packages = get_packages(dir, False)
-        self.partner_packages = get_packages(dir, True)
+        self.packages = get_package_name2path(dir, False)
+        self.partner_packages = get_package_name2path(dir, True)
 
 
 def load_module_members(qualified_module_name: str) -> List[MemberInfo]:
@@ -262,7 +277,7 @@ def top_two_levels_of_modules(
 
     Args:
         package: The package to inspect.
-        remove_hidden: Whether to remove hidden namespaces or not.
+        remove_hidden: Whether to remove hidden namespaces and members or not.
         remove_empty: Whether to remove namespaces without members or not.
 
     Returns:
@@ -275,20 +290,23 @@ def top_two_levels_of_modules(
     _top_two_levels2module_members: defaultdict[str, list] = defaultdict(list)
     for qualified_module_name, module in package.modules.items():
         namespace_parts = qualified_module_name.split(".")
+        # remove hidden namespaces:
+        if remove_hidden and any(part.startswith("_") for part in namespace_parts):
+            continue
         top_two_levels = ".".join(namespace_parts[:2])
-        _top_two_levels2module_members[top_two_levels] += module.members
+        module_members = module.members
+        # remove hidden members:
+        if remove_hidden:
+            module_members = [
+                member for member in module_members if not member.name.startswith("_")
+            ]
+        _top_two_levels2module_members[top_two_levels] += module_members
     top_two_levels2module_members: dict[str, list] = dict(
         _top_two_levels2module_members
     )
     if remove_empty:
         top_two_levels2module_members = {
             k: v for k, v in top_two_levels2module_members.items() if v
-        }
-    if remove_hidden:
-        top_two_levels2module_members = {
-            k: v
-            for k, v in top_two_levels2module_members.items()
-            if not _has_hidden_part(k)
         }
     # sort by keys:
     top_two_levels2module_members = {
