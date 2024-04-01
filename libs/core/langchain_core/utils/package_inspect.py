@@ -214,13 +214,13 @@ class Package:
         return qualified_module_name2module
 
 
-class Repo:
+class LangchainMonorepo:
     """A repository with packages. TODO"""
 
     def __init__(self, dir: str):
         self.dir = dir
-        self.packages = get_package_name2path(dir, False)
-        self.partner_packages = get_package_name2path(dir, True)
+        self.packages = get_package_name2path(dir, partner_packages=False)
+        self.partner_packages = get_package_name2path(dir, partner_packages=True)
 
 
 def load_module_members(qualified_module_name: str) -> List[MemberInfo]:
